@@ -94,14 +94,14 @@ export async function POST(req: Request) {
             }
 
             const svgImage = `
-            <svg width="${preset.full.w}" height="${preset.full.h}">
+            <svg width="${preset.full.w}" height="${preset.full.h}" xmlns="http://www.w3.org/2000/svg">
                 <style>
                     @font-face {
                         font-family: "CustomFont";
-                        src: url("data:application/font-ttf;charset=utf-8;base64,${fontBase64}") format("truetype");
+                        src: url("data:font/ttf;base64,${fontBase64}") format("truetype");
                     }
                     .caption {
-                        font-family: "CustomFont";
+                        font-family: "CustomFont", sans-serif;
                         font-size: ${fontSize}px;
                         fill: #111;
                         text-anchor: middle;
