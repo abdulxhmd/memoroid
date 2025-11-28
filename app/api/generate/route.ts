@@ -73,48 +73,55 @@ export async function POST(req: Request) {
             };
 
             const fontFile = fontMap[font] || "AmaticSC-Regular.ttf";
+            const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
 
-            // Server-side: embed the TTF into the SVG (recommended)
-            const USE_EMBEDDED_FONT = true;
-            let fontCss = "";
+            // Use text-to-svg to generate paths (bypassing font rendering issues)
+            const TextToSVG = require("text-to-svg");
+            let svgPath = "";
 
-            if (USE_EMBEDDED_FONT) {
-                try {
-                    const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
-                    const fontBase64 = fs.readFileSync(fontPath).toString("base64");
-                    const fontDataUrl = `data:font/ttf;base64,${fontBase64}`;
-                    fontCss = `@font-face { font-family: 'CustomFont'; src: url('${fontDataUrl}') format('truetype'); }`;
-                    console.log(`Font loaded and embedded: ${fontFile}`);
-                } catch (e) {
-                    console.warn("Could not embed font, falling back to sans-serif:", e);
-                    fontCss = "";
-                }
-            } else {
-                // fallback (not preferred) — leave for reference
-                const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
-                fontCss = `@font-face { font-family: 'CustomFont'; src: url('file://${fontPath}'); }`;
+            try {
+                const textToSVG = TextToSVG.loadSync(fontPath);
+                const attributes = { fill: "#111", stroke: "none" };
+                const options = {
+                    x: textPos.x,
+                    y: textPos.y,
+                    fontSize: fontSize,
+                    anchor: "center middle",
+                    attributes: attributes
+                };
+
+                svgPath = textToSVG.getD(caption, options);
+                console.log("Generated SVG path for caption.");
+            } catch (e) {
+                console.error("Failed to generate text path:", e);
+                // Fallback to simple text if path generation fails (though unlikely if font exists)
+                svgPath = "";
             }
 
-            const svgImage = `
-            <svg width="${preset.full.w}" height="${preset.full.h}" xmlns="http://www.w3.org/2000/svg">
-                <style>
-                    ${fontCss}
-                    .caption {
-                        font-family: "CustomFont", sans-serif;
-                        font-size: ${fontSize}px;
-                        fill: #111;
-                        text-anchor: middle;
-                        dominant-baseline: middle;
-                    }
-                </style>
-                <rect width="100%" height="100%" fill="transparent" />
-                <text x="${textPos.x}" y="${textPos.y}" class="caption">${escapeXml(String(caption || ""))}</text>
-            </svg>
-            `;
-
-            // DEBUG: optional — log svg length and a small sample so you can inspect in logs
-            console.log("SVG length:", svgImage.length);
-            console.log("SVG sample:", svgImage.slice(0, 512));
+            let svgImage;
+            if (svgPath) {
+                svgImage = `
+                <svg width="${preset.full.w}" height="${preset.full.h}" xmlns="http://www.w3.org/2000/svg">
+                    <path d="${svgPath}" fill="#111" />
+                </svg>
+                `;
+            } else {
+                // Fallback to standard text rendering if text-to-svg fails
+                svgImage = `
+                <svg width="${preset.full.w}" height="${preset.full.h}" xmlns="http://www.w3.org/2000/svg">
+                    <style>
+                        .caption {
+                            font-family: sans-serif;
+                            font-size: ${fontSize}px;
+                            fill: #111;
+                            text-anchor: middle;
+                            dominant-baseline: middle;
+                        }
+                    </style>
+                    <text x="${textPos.x}" y="${textPos.y}" class="caption">${escapeXml(caption)}</text>
+                </svg>
+                `;
+            }
 
             composed = await sharp(composed)
                 .composite([{ input: Buffer.from(svgImage), blend: "over" }])
