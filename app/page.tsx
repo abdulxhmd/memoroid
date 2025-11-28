@@ -11,6 +11,37 @@ import { MobileNav } from "../components/MobileNav";
 
 import { DownloadModal } from "../components/DownloadModal";
 
+function resizeImage(file: File, maxDim = 2000): Promise<Blob> {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const scale = maxDim / Math.max(img.width, img.height);
+            // If image is smaller than maxDim, don't upscale
+            if (scale >= 1) {
+                const canvas = document.createElement("canvas");
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext("2d");
+                ctx?.drawImage(img, 0, 0);
+                canvas.toBlob((blob) => resolve(blob!), "image/jpeg", 0.9);
+                return;
+            }
+
+            const w = Math.round(img.width * scale);
+            const h = Math.round(img.height * scale);
+
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            ctx?.drawImage(img, 0, 0, w, h);
+
+            canvas.toBlob((blob) => resolve(blob!), "image/jpeg", 0.9);
+        };
+        img.src = URL.createObjectURL(file);
+    });
+}
+
 export default function EditorPage() {
     const setFile = useEditorStore((s) => s.setFile);
     const file = useEditorStore((s) => s.file);
@@ -197,8 +228,12 @@ export default function EditorPage() {
             return;
         }
         const overlayBlob = await stylusRef.current?.getOverlayBlob();
+
+        // Resize image before upload to avoid Vercel payload limits
+        const resizedBlob = await resizeImage(file);
+
         const fd = new FormData();
-        fd.append("photo", file);
+        fd.append("photo", resizedBlob, file.name);
         if (overlayBlob) {
             fd.append("overlay", overlayBlob, "overlay.png");
         }
