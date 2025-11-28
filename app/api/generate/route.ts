@@ -73,33 +73,32 @@ export async function POST(req: Request) {
             };
 
             const fontFile = fontMap[font] || "AmaticSC-Regular.ttf";
-            const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
-            console.log("Attempting to load font from:", fontPath);
 
-            let fontBase64 = "";
-            try {
-                if (fs.existsSync(fontPath)) {
-                    const fontBuffer = fs.readFileSync(fontPath);
-                    fontBase64 = fontBuffer.toString("base64");
-                    console.log(`Font loaded successfully. Size: ${fontBuffer.length} bytes. Base64 length: ${fontBase64.length}`);
-                } else {
-                    console.error("Font file not found at:", fontPath);
+            // Server-side: embed the TTF into the SVG (recommended)
+            const USE_EMBEDDED_FONT = true;
+            let fontCss = "";
+
+            if (USE_EMBEDDED_FONT) {
+                try {
+                    const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
+                    const fontBase64 = fs.readFileSync(fontPath).toString("base64");
+                    const fontDataUrl = `data:font/ttf;base64,${fontBase64}`;
+                    fontCss = `@font-face { font-family: 'CustomFont'; src: url('${fontDataUrl}') format('truetype'); }`;
+                    console.log(`Font loaded and embedded: ${fontFile}`);
+                } catch (e) {
+                    console.warn("Could not embed font, falling back to sans-serif:", e);
+                    fontCss = "";
                 }
-            } catch (e) {
-                console.error("Failed to load font:", e);
-            }
-
-            if (!fontBase64) {
-                console.warn("FontBase64 is empty, text rendering may fail.");
+            } else {
+                // fallback (not preferred) — leave for reference
+                const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
+                fontCss = `@font-face { font-family: 'CustomFont'; src: url('file://${fontPath}'); }`;
             }
 
             const svgImage = `
             <svg width="${preset.full.w}" height="${preset.full.h}" xmlns="http://www.w3.org/2000/svg">
                 <style>
-                    @font-face {
-                        font-family: "CustomFont";
-                        src: url("data:font/ttf;base64,${fontBase64}") format("truetype");
-                    }
+                    ${fontCss}
                     .caption {
                         font-family: "CustomFont", sans-serif;
                         font-size: ${fontSize}px;
@@ -108,9 +107,14 @@ export async function POST(req: Request) {
                         dominant-baseline: middle;
                     }
                 </style>
-                <text x="${textPos.x}" y="${textPos.y}" class="caption">${escapeXml(caption)}</text>
+                <rect width="100%" height="100%" fill="transparent" />
+                <text x="${textPos.x}" y="${textPos.y}" class="caption">${escapeXml(String(caption || ""))}</text>
             </svg>
             `;
+
+            // DEBUG: optional — log svg length and a small sample so you can inspect in logs
+            console.log("SVG length:", svgImage.length);
+            console.log("SVG sample:", svgImage.slice(0, 512));
 
             composed = await sharp(composed)
                 .composite([{ input: Buffer.from(svgImage), blend: "over" }])
