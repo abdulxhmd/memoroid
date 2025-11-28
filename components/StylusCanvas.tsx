@@ -1,3 +1,4 @@
+"use client";
 import React, { useRef, useEffect, useImperativeHandle, forwardRef, useState } from "react";
 import { mapClientToInternal } from "../lib/utils";
 
@@ -18,10 +19,15 @@ type Props = {
     bgPreview?: string | null;
     preferStylusOnly?: boolean;
     drawingMode: boolean;
+    strokeColor?: string;
+    strokeWidth?: number;
+    opacity?: number;
+    drawingArea?: { y: number; height: number };
 };
 
 const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
-    width, height, displayWidth, displayHeight, bgPreview, preferStylusOnly = false, drawingMode
+    width, height, displayWidth, displayHeight, bgPreview, preferStylusOnly = false, drawingMode,
+    strokeColor = "#111111", strokeWidth = 8, opacity = 1.0, drawingArea
 }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -29,9 +35,6 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
     const lastPoint = useRef<Point | null>(null);
     const curStroke = useRef<Stroke>([]);
     const [strokes, setStrokes] = useState<Stroke[]>([]);
-    const [brushSize, setBrushSize] = useState(8);
-    const [brushColor, setBrushColor] = useState("#111111");
-    const [opacity, setOpacity] = useState(1.0);
     const [pressureValue, setPressureValue] = useState(0);
 
     useEffect(() => {
@@ -46,13 +49,16 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctxRef.current = ctx;
-
-        ctx.clearRect(0, 0, width, height);
     }, [width, height, displayWidth, displayHeight, drawingMode]);
 
     function getCanvasRect() {
         const c = canvasRef.current!;
         return c.getBoundingClientRect();
+    }
+
+    function isInsideDrawingArea(y: number) {
+        if (!drawingArea) return true;
+        return y >= drawingArea.y && y <= drawingArea.y + drawingArea.height;
     }
 
     function beginStroke(pt: Point) {
@@ -66,8 +72,8 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
         if (!p0) {
             ctx.beginPath();
             ctx.moveTo(pt.x, pt.y);
-            ctx.lineWidth = Math.max(1, brushSize * pt.p);
-            ctx.strokeStyle = brushColor;
+            ctx.lineWidth = Math.max(1, strokeWidth * pt.p);
+            ctx.strokeStyle = strokeColor;
             ctx.globalAlpha = opacity;
             ctx.lineTo(pt.x + 0.1, pt.y + 0.1);
             ctx.stroke();
@@ -77,8 +83,8 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
             ctx.beginPath();
             ctx.moveTo(p0.x, p0.y);
             ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
-            ctx.lineWidth = Math.max(1, brushSize * ((p0.p + pt.p) / 2));
-            ctx.strokeStyle = brushColor;
+            ctx.lineWidth = Math.max(1, strokeWidth * ((p0.p + pt.p) / 2));
+            ctx.strokeStyle = strokeColor;
             ctx.globalAlpha = opacity;
             ctx.stroke();
         }
@@ -88,8 +94,14 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
 
     function endStroke() {
         if (curStroke.current.length > 0) {
+            const strokeData = {
+                points: curStroke.current.slice(),
+                color: strokeColor,
+                width: strokeWidth,
+                opacity: opacity
+            };
             setStrokes((s) => {
-                const next = [...s, curStroke.current.slice()];
+                const next = [...s, strokeData as any];
                 return next.slice(-50);
             });
         }
@@ -102,6 +114,9 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
         if (!drawingMode && e.pointerType !== "mouse") return;
         const rect = getCanvasRect();
         const pt = mapClientToInternal(e.clientX, e.clientY, rect, width, height);
+
+        if (!isInsideDrawingArea(pt.y)) return;
+
         const pressure = e.pressure ?? (e.pointerType === "mouse" ? 0.6 : 0.5);
         const p = Math.max(0.01, Math.min(1, pressure));
         drawingRef.current = true;
@@ -114,6 +129,14 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
         if (!drawingRef.current) return;
         const rect = getCanvasRect();
         const pt = mapClientToInternal(e.clientX, e.clientY, rect, width, height);
+
+        // If we move out of bounds, end the stroke? Or just clamp? 
+        // For now, let's just stop adding points if outside, effectively clipping.
+        if (!isInsideDrawingArea(pt.y)) {
+            // Optional: could end stroke here to be strict
+            return;
+        }
+
         const pressure = e.pressure ?? (e.pointerType === "mouse" ? 0.6 : 0.5);
         const p = Math.max(0.01, Math.min(1, pressure));
         setPressureValue(p);
@@ -144,15 +167,20 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
                 const next = prev.slice(0, -1);
                 const ctx = ctxRef.current!;
                 ctx.clearRect(0, 0, width, height);
-                for (const stroke of next) {
+                for (const strokeData of next) {
+                    const stroke = (strokeData as any).points;
+                    const sColor = (strokeData as any).color;
+                    const sWidth = (strokeData as any).width;
+                    const sOpacity = (strokeData as any).opacity;
+
                     for (let i = 0; i < stroke.length; i++) {
                         const p = stroke[i];
                         if (i === 0) {
                             ctx.beginPath();
                             ctx.moveTo(p.x, p.y);
-                            ctx.lineWidth = Math.max(1, brushSize * p.p);
-                            ctx.strokeStyle = brushColor;
-                            ctx.globalAlpha = opacity;
+                            ctx.lineWidth = Math.max(1, sWidth * p.p);
+                            ctx.strokeStyle = sColor;
+                            ctx.globalAlpha = sOpacity;
                             ctx.lineTo(p.x + 0.1, p.y + 0.1);
                             ctx.stroke();
                         } else {
@@ -162,9 +190,9 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
                             ctx.beginPath();
                             ctx.moveTo(p0.x, p0.y);
                             ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
-                            ctx.lineWidth = Math.max(1, brushSize * ((p0.p + p.p) / 2));
-                            ctx.strokeStyle = brushColor;
-                            ctx.globalAlpha = opacity;
+                            ctx.lineWidth = Math.max(1, sWidth * ((p0.p + p.p) / 2));
+                            ctx.strokeStyle = sColor;
+                            ctx.globalAlpha = sOpacity;
                             ctx.stroke();
                         }
                     }
@@ -172,38 +200,22 @@ const StylusCanvas = forwardRef<StylusCanvasHandle, Props>(({
                 return next;
             });
         }
-    }), [brushColor, brushSize, opacity, width, height]);
+    }), [width, height]);
 
     return (
-        <div>
-            <div className="flex gap-2 mb-2 items-center">
-                <label>Brush</label>
-                <input type="range" min={1} max={100} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} />
-                <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} />
-                <label>Opacity</label>
-                <input type="range" min={0.1} max={1} step={0.05} value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} />
-                <button onClick={() => {
-                    const ctx = ctxRef.current!;
-                    ctx.clearRect(0, 0, width, height);
-                    setStrokes([]);
-                }}>Clear</button>
-                <button onClick={() => {
-                    (ref as any).current?.undo?.();
-                }}>Undo</button>
-                <div className="ml-auto text-sm">Pressure: {pressureValue.toFixed(2)}</div>
-            </div>
-
-            <div style={{ border: "1px solid #ddd", display: "inline-block" }}>
-                <canvas
-                    ref={canvasRef}
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                    style={{ display: "block", touchAction: drawingMode ? "none" : "auto" }}
-                />
-            </div>
-        </div>
+        <canvas
+            ref={canvasRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            style={{
+                display: "block",
+                touchAction: drawingMode ? "none" : "auto",
+                width: "100%",
+                height: "100%"
+            }}
+        />
     );
 });
 

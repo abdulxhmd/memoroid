@@ -25,7 +25,7 @@ export default function ImageCropper({ imageSrc, aspect, onCropComplete, onLoadO
         img.src = imageSrc;
     }, [imageSrc, onLoadOriginalSize]);
 
-    const onCropCompleteInternal = useCallback((croppedArea, croppedAreaPixelsRes) => {
+    const onCropCompleteInternal = useCallback((croppedArea: any, croppedAreaPixelsRes: any) => {
         setCroppedAreaPixels(croppedAreaPixelsRes);
         onCropComplete({
             x: Math.round(croppedAreaPixelsRes.x),
@@ -45,7 +45,7 @@ export default function ImageCropper({ imageSrc, aspect, onCropComplete, onLoadO
                 onCropChange={setCrop}
                 onZoomChange={setZoom}
                 onCropComplete={onCropCompleteInternal}
-                objectFit="horizontal-cover"
+                objectFit="contain"
             />
             <div style={{ position: "absolute", right: 12, bottom: 12 }}>
                 <label className="text-sm">Zoom</label>

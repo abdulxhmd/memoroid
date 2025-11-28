@@ -5,6 +5,11 @@ import StylusCanvas from "../components/StylusCanvas";
 import { useEditorStore } from "../components/EditorStateProvider";
 import { PRESETS } from "../lib/presets";
 import { mapPreviewCropToOriginal } from "../lib/utils";
+import { Header } from "../components/Header";
+import { Sidebar } from "../components/Sidebar";
+import { MobileNav } from "../components/MobileNav";
+
+import { DownloadModal } from "../components/DownloadModal";
 
 export default function EditorPage() {
     const setFile = useEditorStore((s) => s.setFile);
@@ -16,6 +21,8 @@ export default function EditorPage() {
     const setFormat = useEditorStore((s) => s.setFormat);
     const caption = useEditorStore((s) => s.caption);
     const setCaption = useEditorStore((s) => s.setCaption);
+    const font = useEditorStore((s) => s.font);
+    const setFont = useEditorStore((s) => s.setFont);
     const drawingMode = useEditorStore((s) => s.drawingMode);
     const setDrawingMode = useEditorStore((s) => s.setDrawingMode);
 
@@ -23,6 +30,30 @@ export default function EditorPage() {
     const [previewSize, setPreviewSize] = useState<{ w: number; h: number } | null>(null);
     const stylusRef = useRef<any>(null);
     const [originalSize, setOriginalSize] = useState<{ w: number; h: number } | null>(null);
+
+    // New UI States
+    const [darkMode, setDarkMode] = useState(false);
+    const [brushSize, setBrushSize] = useState(5);
+    const [opacity, setOpacity] = useState(100);
+    const [color, setColor] = useState("#1A1A1A");
+    const [fontSize, setFontSize] = useState(30);
+
+    // Download State
+    const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
+
+    // Calculate scaling for the preview area
+    const preset = PRESETS[format] || PRESETS.landscape;
+    const scale = 0.6; // Scale down for display
+    const displayW = preset.full.w * scale;
+    const displayH = preset.full.h * scale;
+
+    useEffect(() => {
+        if (darkMode) {
+            document.documentElement.classList.add("dark");
+        } else {
+            document.documentElement.classList.remove("dark");
+        }
+    }, [darkMode]);
 
     useEffect(() => {
         return () => {
@@ -49,6 +80,117 @@ export default function EditorPage() {
         setCropData(mapped);
     }
 
+    // Text Dragging State
+    const [textPos, setTextPos] = useState<{ x: number; y: number } | null>(null);
+    const isDraggingText = useRef(false);
+    const dragOffset = useRef({ x: 0, y: 0 });
+
+    // Reset text position when format changes
+    useEffect(() => {
+        const p = PRESETS[format] || PRESETS.landscape;
+        const bottomMargin = p.full.h - (p.offset.top + p.image.h);
+        const defaultY = p.offset.top + p.image.h + (bottomMargin / 2);
+        setTextPos({ x: p.full.w / 2, y: defaultY });
+    }, [format]);
+
+    const handleTextPointerDown = (e: React.PointerEvent) => {
+        if (!textPos) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const target = e.currentTarget as HTMLElement;
+        target.setPointerCapture(e.pointerId);
+        isDraggingText.current = true;
+
+        // Calculate offset from the text center to the pointer
+        // We need to convert pointer client coords to our internal scale
+        const rect = target.getBoundingClientRect();
+        // This is rough, but since we track center, let's just track delta
+        dragOffset.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const textRef = useRef<HTMLDivElement>(null);
+
+    const handleTextPointerMove = (e: React.PointerEvent) => {
+        if (!isDraggingText.current || !textPos) return;
+        e.stopPropagation();
+        e.preventDefault();
+
+        const deltaX = (e.clientX - dragOffset.current.x) / scale;
+        const deltaY = (e.clientY - dragOffset.current.y) / scale;
+
+        dragOffset.current = { x: e.clientX, y: e.clientY };
+
+        setTextPos(prev => {
+            if (!prev) return null;
+            const p = PRESETS[format] || PRESETS.landscape;
+            const newX = prev.x + deltaX;
+            const newY = prev.y + deltaY;
+
+            // Get text dimensions in internal units
+            let halfWidth = 0;
+            let halfHeight = 0;
+            if (textRef.current) {
+                const rect = textRef.current.getBoundingClientRect();
+                halfWidth = (rect.width / scale) / 2;
+                halfHeight = (rect.height / scale) / 2;
+            }
+
+            // Constrain to chin area with padding
+            // Ensure the edges of the text don't go beyond the frame
+            const padding = 20;
+            const minX = padding + halfWidth;
+            const maxX = p.full.w - padding - halfWidth;
+
+            const minY = p.offset.top + p.image.h + padding + halfHeight;
+            const maxY = p.full.h - padding - halfHeight;
+
+            // If text is wider than frame, just center it or clamp to center
+            const clampedX = minX > maxX ? p.full.w / 2 : Math.max(minX, Math.min(maxX, newX));
+            const clampedY = minY > maxY ? (minY + maxY) / 2 : Math.max(minY, Math.min(maxY, newY));
+
+            return {
+                x: clampedX,
+                y: clampedY
+            };
+        });
+    };
+
+    // Auto-clamp text when dimensions change (typing or resizing)
+    useEffect(() => {
+        if (!textPos || !textRef.current) return;
+
+        const p = PRESETS[format] || PRESETS.landscape;
+        const rect = textRef.current.getBoundingClientRect();
+        const halfWidth = (rect.width / scale) / 2;
+        const halfHeight = (rect.height / scale) / 2;
+
+        const padding = 20;
+        const minX = padding + halfWidth;
+        const maxX = p.full.w - padding - halfWidth;
+
+        const minY = p.offset.top + p.image.h + padding + halfHeight;
+        const maxY = p.full.h - padding - halfHeight;
+
+        setTextPos(prev => {
+            if (!prev) return null;
+            // Only update if out of bounds
+            const clampedX = minX > maxX ? p.full.w / 2 : Math.max(minX, Math.min(maxX, prev.x));
+            const clampedY = minY > maxY ? (minY + maxY) / 2 : Math.max(minY, Math.min(maxY, prev.y));
+
+            if (clampedX !== prev.x || clampedY !== prev.y) {
+                return { x: clampedX, y: clampedY };
+            }
+            return prev;
+        });
+    }, [caption, fontSize, format, scale, font]); // Dependencies that affect size
+
+    const handleTextPointerUp = (e: React.PointerEvent) => {
+        if (!isDraggingText.current) return;
+        isDraggingText.current = false;
+        const target = e.currentTarget as HTMLElement;
+        target.releasePointerCapture(e.pointerId);
+    };
+
     async function handleGenerate() {
         if (!file || !cropData) {
             alert("Please upload and crop your photo first.");
@@ -57,10 +199,17 @@ export default function EditorPage() {
         const overlayBlob = await stylusRef.current?.getOverlayBlob();
         const fd = new FormData();
         fd.append("photo", file);
-        fd.append("overlay", overlayBlob, "overlay.png");
+        if (overlayBlob) {
+            fd.append("overlay", overlayBlob, "overlay.png");
+        }
         fd.append("cropData", JSON.stringify(cropData));
         fd.append("format", format);
         fd.append("caption", caption || "");
+        fd.append("font", font);
+        fd.append("fontSize", fontSize.toString());
+        if (textPos) {
+            fd.append("textPos", JSON.stringify(textPos));
+        }
         fd.append("date", new Date().toISOString());
 
         const res = await fetch("/api/generate", { method: "POST", body: fd });
@@ -70,61 +219,82 @@ export default function EditorPage() {
             return;
         }
         const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        sessionStorage.setItem("memoroid_result", url);
-        window.location.href = "/download";
+        const pngBlob = new Blob([blob], { type: "image/png" });
+        const url = URL.createObjectURL(pngBlob);
+        setGeneratedUrl(url);
     }
 
+
+
     return (
-        <div className="grid grid-cols-12 gap-6">
-            <aside className="col-span-3">
-                <div className="bg-white p-4 rounded-lg shadow-sm">
-                    <h3 className="font-semibold">Tools</h3>
-                    <div className="mt-3">
-                        <label className="block">Upload</label>
-                        <input type="file" accept="image/*" onChange={(e) => handleFile(e.target.files?.[0] ?? null)} />
-                    </div>
+        <div className="flex flex-col h-screen bg-pastel-bg dark:bg-dark-bg transition-colors overflow-hidden">
+            <Header darkMode={darkMode} toggleDarkMode={() => setDarkMode(!darkMode)} />
 
-                    <div className="mt-3">
-                        <label>Format</label>
-                        <select value={format} onChange={(e) => setFormat(e.target.value as any)} className="w-full border rounded p-1">
-                            <option value="instax">Instax Mini</option>
-                            <option value="polaroid">Polaroid</option>
-                        </select>
-                    </div>
-
-                    <div className="mt-3">
-                        <label>Caption</label>
-                        <input type="text" value={caption} onChange={(e) => setCaption(e.target.value)} className="w-full border rounded p-1" />
-                    </div>
-
-                    <div className="mt-3">
-                        <label>Drawing Mode</label>
-                        <div className="flex items-center">
-                            <input type="checkbox" checked={drawingMode} onChange={(e) => setDrawingMode(e.target.checked)} />
-                            <span className="ml-2 text-sm">Enable drawing (pen/touch)</span>
-                        </div>
-                    </div>
+            <div className="flex flex-1 overflow-hidden">
+                {/* Desktop Sidebar - Hidden on Mobile */}
+                <div className="hidden md:block h-full">
+                    <Sidebar
+                        onUpload={handleFile}
+                        drawingMode={drawingMode}
+                        setDrawingMode={setDrawingMode}
+                        brushSize={brushSize}
+                        setBrushSize={setBrushSize}
+                        opacity={opacity}
+                        setOpacity={setOpacity}
+                        color={color}
+                        setColor={setColor}
+                        onUndo={() => stylusRef.current?.undo()}
+                        onClear={() => stylusRef.current?.clear()}
+                        onGenerate={handleGenerate}
+                        caption={caption}
+                        setCaption={setCaption}
+                        font={font}
+                        setFont={setFont}
+                        fontSize={fontSize}
+                        setFontSize={setFontSize}
+                        format={format}
+                        setFormat={(f) => setFormat(f)}
+                    />
                 </div>
-            </aside>
 
-            <main className="col-span-9">
-                <div className="bg-white p-4 rounded-lg">
-                    {!previewSrc && (
-                        <div className="text-center py-16">
-                            <p className="mb-4">Drop a photo or use the upload control.</p>
+                {/* Main Canvas Area */}
+                <main className="flex-1 flex items-center justify-center p-4 md:p-8 relative">
+                    {!previewSrc ? (
+                        <div className="text-center p-8 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-2xl bg-white/50 dark:bg-dark-surface/50">
+                            <div className="w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-xl mx-auto mb-4 flex items-center justify-center">
+                                <span className="text-4xl">🖼️</span>
+                            </div>
+                            <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-2">Drop your photo here</h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">or use the upload button</p>
                         </div>
-                    )}
-
-                    {previewSrc && (
-                        <>
-                            <div className="mb-4">
+                    ) : (
+                        <div
+                            className="relative shadow-2xl transition-transform duration-300"
+                            style={{
+                                width: displayW,
+                                height: displayH,
+                                backgroundColor: "white",
+                                transform: "scale(1)", // Could add zoom logic here
+                                overflow: "hidden", // Clip content to frame
+                            }}
+                        >
+                            {/* Layer 1: Photo Cropper Area */}
+                            <div
+                                style={{
+                                    position: "absolute",
+                                    left: preset.offset.left * scale,
+                                    top: preset.offset.top * scale,
+                                    width: preset.image.w * scale,
+                                    height: preset.image.h * scale,
+                                    overflow: "hidden",
+                                    backgroundColor: "white",
+                                    pointerEvents: drawingMode ? "none" : "auto"
+                                }}
+                            >
                                 <ImageCropper
                                     imageSrc={previewSrc}
-                                    aspect={format === "instax" ? PRESETS.instax.image.w / PRESETS.instax.image.h : PRESETS.polaroid.image.w / PRESETS.polaroid.image.h}
-                                    onCropComplete={(previewCrop) => {
-                                        onCropComplete(previewCrop);
-                                    }}
+                                    aspect={preset.image.w / preset.image.h}
+                                    onCropComplete={onCropComplete}
                                     onLoadOriginalSize={(s) => {
                                         setOriginalImageSize(s);
                                         setOriginalSize(s);
@@ -133,27 +303,101 @@ export default function EditorPage() {
                                 />
                             </div>
 
-                            <div>
-                                <h4 className="mb-2">Draw (overlay)</h4>
+                            {/* Layer 2: Drawing Canvas */}
+                            <div
+                                style={{
+                                    position: "absolute",
+                                    inset: 0,
+                                    pointerEvents: drawingMode ? "auto" : "none",
+                                    zIndex: 40, // Above text
+                                    opacity: opacity / 100
+                                }}
+                            >
                                 <StylusCanvas
                                     ref={stylusRef}
-                                    width={PRESETS[format].full.w}
-                                    height={PRESETS[format].full.h}
-                                    displayWidth={800}
-                                    displayHeight={Math.round((PRESETS[format].full.h / PRESETS[format].full.w) * 800)}
-                                    bgPreview={previewSrc}
+                                    width={preset.full.w}
+                                    height={preset.full.h}
+                                    displayWidth={displayW}
+                                    displayHeight={displayH}
+                                    bgPreview={null}
                                     preferStylusOnly={false}
                                     drawingMode={drawingMode}
+                                    strokeColor={color}
+                                    strokeWidth={brushSize}
+                                    drawingArea={{
+                                        y: preset.offset.top + preset.image.h,
+                                        height: preset.full.h - (preset.offset.top + preset.image.h)
+                                    }}
                                 />
                             </div>
 
-                            <div className="mt-4">
-                                <button onClick={() => handleGenerate()} className="px-4 py-2 bg-primary text-white rounded">Generate Print-Ready File</button>
-                            </div>
-                        </>
+                            {/* Layer 3: Caption Overlay (Draggable) */}
+                            {caption && textPos && (
+                                <div
+                                    ref={textRef}
+                                    onPointerDown={handleTextPointerDown}
+                                    onPointerMove={handleTextPointerMove}
+                                    onPointerUp={handleTextPointerUp}
+                                    onPointerCancel={handleTextPointerUp}
+                                    style={{
+                                        position: "absolute",
+                                        top: textPos.y * scale,
+                                        left: textPos.x * scale,
+                                        transform: "translate(-50%, -50%)",
+                                        fontFamily: font,
+                                        fontSize: `${fontSize * scale}px`,
+                                        color: "#111",
+                                        cursor: "move",
+                                        zIndex: 30, // Below canvas
+                                        userSelect: "none",
+                                        touchAction: "none",
+                                        whiteSpace: "normal",
+                                        wordBreak: "break-word",
+                                        maxWidth: `${(preset.full.w - 80) * scale}px`, // 40px padding * 2
+                                        maxHeight: `${(preset.full.h - (preset.offset.top + preset.image.h) - 40) * scale}px`, // Chin height - 40px padding
+                                        overflow: "hidden",
+                                        textAlign: "center",
+                                        lineHeight: "1",
+                                        pointerEvents: drawingMode ? "none" : "auto"
+                                    }}
+                                >
+                                    {caption}
+                                </div>
+                            )}
+                        </div>
                     )}
-                </div>
-            </main>
+                </main>
+            </div>
+
+            {/* Mobile Navigation - Hidden on Desktop */}
+            <div className="md:hidden">
+                <MobileNav
+                    onUpload={handleFile}
+                    drawingMode={drawingMode}
+                    setDrawingMode={setDrawingMode}
+                    brushSize={brushSize}
+                    setBrushSize={setBrushSize}
+                    opacity={opacity}
+                    setOpacity={setOpacity}
+                    color={color}
+                    setColor={setColor}
+                    onUndo={() => stylusRef.current?.undo()}
+                    onClear={() => stylusRef.current?.clear()}
+                    onGenerate={handleGenerate}
+                    caption={caption}
+                    setCaption={setCaption}
+                    format={format}
+                    setFormat={(f) => setFormat(f)}
+                />
+            </div>
+
+            {/* Download Modal */}
+            {generatedUrl && (
+                <DownloadModal
+                    url={generatedUrl}
+                    onClose={() => setGeneratedUrl(null)}
+                />
+            )}
         </div>
     );
 }

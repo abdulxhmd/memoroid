@@ -1,15 +1,15 @@
-export type FormatKey = "instax" | "polaroid";
+export type FormatKey = "landscape" | "portrait";
 
 export const PRESETS = {
-    instax: {
+    landscape: {
         full: { w: 1016, h: 638 },    // full paper pixels at 300 DPI
         image: { w: 732, h: 543 },
         offset: { left: 142, top: 47 }
     },
-    polaroid: {
-        full: { w: 1270, h: 1045 },
-        image: { w: 932, h: 907 },
-        offset: { left: 169, top: 69 }
+    portrait: {
+        full: { w: 1050, h: 1260 },
+        image: { w: 930, h: 930 },
+        offset: { left: 60, top: 60 }
     }
 } as const;
 

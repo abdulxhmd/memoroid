@@ -1,47 +1,34 @@
 import { NextResponse } from "next/server";
-import formidable from "formidable";
 import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 import { PRESETS } from "../../../lib/presets";
 
-export const config = {
-    api: {
-        bodyParser: false
-    }
-};
-
-function parseForm(req: any): Promise<{ fields: any; files: any }> {
-    const form = formidable({
-        multiples: false,
-        maxFileSize: 12 * 1024 * 1024
-    });
-    return new Promise((resolve, reject) => {
-        form.parse(req, (err, fields, files) => {
-            if (err) return reject(err);
-            resolve({ fields, files });
-        });
-    });
-}
-
-export default async function handler(req: Request) {
+export async function POST(req: Request) {
     try {
-        const { fields, files } = await parseForm((req as any));
-        const format = (fields.format as string) || "instax";
-        if (!["instax", "polaroid"].includes(format)) {
+        const formData = await req.formData();
+
+        const format = (formData.get("format") as string) || "landscape";
+        if (!["landscape", "portrait"].includes(format)) {
             return new NextResponse("Invalid format", { status: 400 });
         }
-        const preset = PRESETS[format as "instax" | "polaroid"];
-        const cropData = JSON.parse(fields.cropData as string || "{}");
-        const caption = fields.caption || "";
-        const date = fields.date || new Date().toISOString();
+        const preset = PRESETS[format as "landscape" | "portrait"];
+        const cropData = JSON.parse(formData.get("cropData") as string || "{}");
 
-        if (!files.photo) return new NextResponse("Missing photo", { status: 400 });
+        const caption = formData.get("caption") as string || "";
+        const font = formData.get("font") as string || "AmaticSC";
+        console.log("Received font parameter:", font);
 
-        const photoPath = (files.photo as any).filepath || (files.photo as any).path;
-        const overlayPath = (files.overlay as any)?.filepath || (files.overlay as any)?.path;
+        const fontSize = parseInt(formData.get("fontSize") as string || "30");
+        const textPosStr = formData.get("textPos") as string;
+        let textPos = textPosStr ? JSON.parse(textPosStr) : null;
 
-        const photoBuffer = fs.readFileSync(photoPath);
+        const photoFile = formData.get("photo") as File | null;
+        if (!photoFile) return new NextResponse("Missing photo", { status: 400 });
+
+        const overlayFile = formData.get("overlay") as File | null;
+
+        const photoBuffer = Buffer.from(await photoFile.arrayBuffer());
 
         const { x, y, width, height } = {
             x: Math.round(cropData.x),
@@ -64,52 +51,97 @@ export default async function handler(req: Request) {
             }
         });
 
-        const composed = await background
+        let composed = await background
             .composite([{ input: extracted, left: preset.offset.left, top: preset.offset.top }])
             .png()
             .toBuffer();
 
-        let composedWithOverlay = composed;
-
-        if (overlayPath && fs.existsSync(overlayPath)) {
-            const overlayBuf = fs.readFileSync(overlayPath);
-            const overlayMeta = await sharp(overlayBuf).metadata();
-            if (overlayMeta.width !== preset.full.w || overlayMeta.height !== preset.full.h) {
-                return new NextResponse("Overlay size mismatch. Expected " + preset.full.w + "x" + preset.full.h, { status: 400 });
+        // Render Text if caption exists
+        if (caption) {
+            // Default position if not provided (center of the chin area)
+            if (!textPos) {
+                const bottomMargin = preset.full.h - (preset.offset.top + preset.image.h);
+                const defaultY = preset.offset.top + preset.image.h + (bottomMargin / 2);
+                textPos = { x: preset.full.w / 2, y: defaultY };
             }
-            composedWithOverlay = await sharp(composed)
-                .composite([{ input: overlayBuf, blend: "over" }])
+
+            const fontMap: Record<string, string> = {
+                "AmaticSC": "AmaticSC-Regular.ttf",
+                "IndieFlower": "IndieFlower-Regular.ttf",
+                "Caveat": "Caveat-Regular.ttf",
+                "ShadowsIntoLight": "ShadowsIntoLight-Regular.ttf"
+            };
+
+            const fontFile = fontMap[font] || "AmaticSC-Regular.ttf";
+            const fontPath = path.join(process.cwd(), "public", "fonts", fontFile);
+            console.log("Attempting to load font from:", fontPath);
+
+            let fontBase64 = "";
+            try {
+                if (fs.existsSync(fontPath)) {
+                    const fontBuffer = fs.readFileSync(fontPath);
+                    fontBase64 = fontBuffer.toString("base64");
+                    console.log(`Font loaded successfully. Size: ${fontBuffer.length} bytes. Base64 length: ${fontBase64.length}`);
+                } else {
+                    console.error("Font file not found at:", fontPath);
+                }
+            } catch (e) {
+                console.error("Failed to load font:", e);
+            }
+
+            if (!fontBase64) {
+                console.warn("FontBase64 is empty, text rendering may fail.");
+            }
+
+            const svgImage = `
+            <svg width="${preset.full.w}" height="${preset.full.h}">
+                <style>
+                    @font-face {
+                        font-family: "CustomFont";
+                        src: url("data:application/font-ttf;charset=utf-8;base64,${fontBase64}") format("truetype");
+                    }
+                    .caption {
+                        font-family: "CustomFont";
+                        font-size: ${fontSize}px;
+                        fill: #111;
+                        text-anchor: middle;
+                        dominant-baseline: middle;
+                    }
+                </style>
+                <text x="${textPos.x}" y="${textPos.y}" class="caption">${escapeXml(caption)}</text>
+            </svg>
+            `;
+
+            composed = await sharp(composed)
+                .composite([{ input: Buffer.from(svgImage), blend: "over" }])
                 .png()
                 .toBuffer();
         }
 
-        const svg = `
-      <svg width="${preset.full.w}" height="${preset.full.h}">
-        <style>
-          @font-face {
-            font-family: 'AmaticSC';
-            src: url('file://${path.join(process.cwd(), "public/fonts/AmaticSC-Regular.ttf")}');
-          }
-          .c { font-family: 'AmaticSC', sans-serif; font-size: ${Math.round(preset.full.h * 0.035)}px; fill:#111; text-anchor:middle; }
-        </style>
-        <text x="${preset.full.w / 2}" y="${preset.full.h - Math.round(preset.full.h * 0.06)}" class="c">${escapeXml(String(caption))}</text>
-      </svg>
-    `;
-        const final = await sharp(composedWithOverlay)
-            .composite([{ input: Buffer.from(svg), left: 0, top: 0 }])
-            .png()
-            .toBuffer();
+        let composedWithOverlay = composed;
 
-        try {
-            fs.unlinkSync(photoPath);
-            if (overlayPath) fs.unlinkSync(overlayPath);
-        } catch (e) { }
-
-        return new NextResponse(final, {
+        if (overlayFile) {
+            const overlayBuf = Buffer.from(await overlayFile.arrayBuffer());
+            // Only composite if overlay has content (size > 0)
+            if (overlayBuf.length > 0) {
+                const overlayMeta = await sharp(overlayBuf).metadata();
+                // Resize overlay if it doesn't match exactly (though it should from frontend)
+                // or just composite it.
+                if (overlayMeta.width === preset.full.w && overlayMeta.height === preset.full.h) {
+                    composedWithOverlay = await sharp(composed)
+                        .composite([{ input: overlayBuf, blend: "over" }])
+                        .png()
+                        .toBuffer();
+                } else {
+                    console.warn("Overlay size mismatch, skipping overlay or resizing needed.");
+                }
+            }
+        }
+        return new NextResponse(composedWithOverlay as any, {
             status: 200,
             headers: {
                 "Content-Type": "image/png",
-                "Content-Disposition": `attachment; filename="memoroid_${format}_${Date.now()}.png"`
+                "Content-Disposition": `attachment; filename = "memoroid_${format}_${Date.now()}.png"`
             }
         });
     } catch (err: any) {

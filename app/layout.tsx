@@ -6,11 +6,17 @@ export const metadata = {
     description: "Memoroid — create printed Polaroid and Instax keepsakes"
 };
 
+export const viewport = {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 1,
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
     return (
         <html lang="en">
             <body className="min-h-screen bg-soft text-primary">
-                <div className="max-w-6xl mx-auto p-6">{children}</div>
+                {children}
             </body>
         </html>
     );
